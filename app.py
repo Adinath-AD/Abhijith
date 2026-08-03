@@ -198,21 +198,23 @@ if __name__ == "__main__":
 
     init_database()
 
+    import os
+
+    port = int(os.environ.get("PORT", 5000))
+
     print()
     print("==========================================")
     print(" SMART GRID FAULT DETECTION SYSTEM")
     print("==========================================")
     print()
-    print("Dashboard:")
-    print("http://127.0.0.1:5000")
-    print()
-    print("API:")
-    print("http://127.0.0.1:5000/api/sensor")
+    print("Server starting...")
+    print("Port:", port)
     print()
     print("Waiting for sensor data...")
     print()
 
     app.run(
         host="0.0.0.0",
-        port=5000
+        port=port
     )
+
