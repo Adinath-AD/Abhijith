@@ -193,10 +193,11 @@ def history():
         for row in rows
     ])
 
+init_database()
 
 if __name__ == "__main__":
 
-    init_database()
+    
 
     import os
 
