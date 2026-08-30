@@ -1,7 +1,11 @@
-﻿from flask import Flask, request, jsonify, render_template
-import joblib
-import sqlite3
 from datetime import datetime
+import os
+import sqlite3
+from flask import Flask, jsonify, render_template, request
+import joblib
+
+# 1. Import your speech alert module
+from speech_alert import speak_fault_alert
 
 app = Flask(__name__)
 
@@ -11,11 +15,10 @@ DATABASE = "database.db"
 
 
 def init_database():
+  connection = sqlite3.connect(DATABASE)
+  cursor = connection.cursor()
 
-    connection = sqlite3.connect(DATABASE)
-    cursor = connection.cursor()
-
-    cursor.execute("""
+  cursor.execute("""
         CREATE TABLE IF NOT EXISTS sensor_data (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             timestamp TEXT,
@@ -30,58 +33,53 @@ def init_database():
         )
     """)
 
-    connection.commit()
-    connection.close()
+  connection.commit()
+  connection.close()
 
-    print("Database initialized.")
+  print("Database initialized.")
 
 
 @app.route("/")
 def dashboard():
-
-    return render_template("dashboard.html")
+  return render_template("dashboard.html")
 
 
 @app.route("/api/sensor", methods=["POST"])
 def sensor():
+  try:
+    data = request.get_json()
 
-    try:
+    voltage = float(data["voltage"])
+    current = float(data["current"])
+    temperature = float(data["temperature"])
+    humidity = float(data["humidity"])
+    power = float(data["power"])
 
-        data = request.get_json()
+    features = [[voltage, current, temperature, humidity, power]]
 
-        voltage = float(data["voltage"])
-        current = float(data["current"])
-        temperature = float(data["temperature"])
-        humidity = float(data["humidity"])
-        power = float(data["power"])
+    prediction = int(model.predict(features)[0])
 
-        features = [[
-            voltage,
-            current,
-            temperature,
-            humidity,
-            power
-        ]]
+    probability = model.predict_proba(features)[0]
 
-        prediction = int(model.predict(features)[0])
+    confidence = float(max(probability))
 
-        probability = model.predict_proba(features)[0]
+    if prediction == 0:
+      status = "NORMAL"
+    else:
+      status = "FAULT"
 
-        confidence = float(max(probability))
+    # 2. Trigger your speech alert when a fault happens!
+    if status == "FAULT":
+      fault_type = "Smart Grid Anomaly"
+      speak_fault_alert(fault_type, voltage, current)
 
-        if prediction == 0:
-            status = "NORMAL"
-        else:
-            status = "FAULT"
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        timestamp = datetime.now().strftime(
-            "%Y-%m-%d %H:%M:%S"
-        )
+    connection = sqlite3.connect(DATABASE)
+    cursor = connection.cursor()
 
-        connection = sqlite3.connect(DATABASE)
-        cursor = connection.cursor()
-
-        cursor.execute("""
+    cursor.execute(
+        """
             INSERT INTO sensor_data (
                 timestamp,
                 voltage,
@@ -94,7 +92,8 @@ def sensor():
                 confidence
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
+        """,
+        (
             timestamp,
             voltage,
             current,
@@ -103,119 +102,99 @@ def sensor():
             power,
             prediction,
             status,
-            confidence
-        ))
+            confidence,
+        ),
+    )
 
-        connection.commit()
-        connection.close()
+    connection.commit()
+    connection.close()
 
-        print()
-        print("========== SENSOR DATA ==========")
-        print("Voltage:", voltage, "V")
-        print("Current:", current, "A")
-        print("Temperature:", temperature, "C")
-        print("Humidity:", humidity, "%")
-        print("Power:", power, "W")
-        print("Status:", status)
-        print("Confidence:", round(confidence * 100, 2), "%")
-        print("=================================")
+    print()
+    print("========== SENSOR DATA ==========")
+    print("Voltage:", voltage, "V")
+    print("Current:", current, "A")
+    print("Temperature:", temperature, "C")
+    print("Humidity:", humidity, "%")
+    print("Power:", power, "W")
+    print("Status:", status)
+    print("Confidence:", round(confidence * 100, 2), "%")
+    print("=================================")
 
-        return jsonify({
-            "status": status,
-            "prediction": prediction,
-            "confidence": confidence,
-            "voltage": voltage,
-            "current": current,
-            "temperature": temperature,
-            "humidity": humidity,
-            "power": power,
-            "timestamp": timestamp
-        })
+    return jsonify({
+        "status": status,
+        "prediction": prediction,
+        "confidence": confidence,
+        "voltage": voltage,
+        "current": current,
+        "temperature": temperature,
+        "humidity": humidity,
+        "power": power,
+        "timestamp": timestamp,
+        "audio_alert": status == "FAULT",
+    })
 
-    except Exception as error:
-
-        print("ERROR:", error)
-
-        return jsonify({
-            "error": str(error)
-        }), 500
+  except Exception as error:
+    print("ERROR:", error)
+    return jsonify({"error": str(error)}), 500
 
 
 @app.route("/api/latest")
 def latest():
+  connection = sqlite3.connect(DATABASE)
+  connection.row_factory = sqlite3.Row
 
-    connection = sqlite3.connect(DATABASE)
-    connection.row_factory = sqlite3.Row
+  cursor = connection.cursor()
 
-    cursor = connection.cursor()
-
-    cursor.execute("""
+  cursor.execute("""
         SELECT *
         FROM sensor_data
         ORDER BY id DESC
         LIMIT 1
     """)
 
-    row = cursor.fetchone()
+  row = cursor.fetchone()
+  connection.close()
 
-    connection.close()
+  if row is None:
+    return jsonify({"message": "No sensor data available"})
 
-    if row is None:
-
-        return jsonify({
-            "message": "No sensor data available"
-        })
-
-    return jsonify(dict(row))
+  return jsonify(dict(row))
 
 
 @app.route("/api/history")
 def history():
+  connection = sqlite3.connect(DATABASE)
+  connection.row_factory = sqlite3.Row
 
-    connection = sqlite3.connect(DATABASE)
-    connection.row_factory = sqlite3.Row
+  cursor = connection.cursor()
 
-    cursor = connection.cursor()
-
-    cursor.execute("""
+  cursor.execute("""
         SELECT *
         FROM sensor_data
         ORDER BY id DESC
         LIMIT 30
     """)
 
-    rows = cursor.fetchall()
+  rows = cursor.fetchall()
+  connection.close()
 
-    connection.close()
+  return jsonify([dict(row) for row in rows])
 
-    return jsonify([
-        dict(row)
-        for row in rows
-    ])
 
 init_database()
 
 if __name__ == "__main__":
+  port = int(os.environ.get("PORT", 5000))
 
-    
+  print()
+  print("==========================================")
+  print(" SMART GRID FAULT DETECTION SYSTEM")
+  print("==========================================")
+  print()
+  print("Server starting...")
+  print("Port:", port)
+  print()
+  print("Waiting for sensor data...")
+  print()
 
-    import os
-
-    port = int(os.environ.get("PORT", 5000))
-
-    print()
-    print("==========================================")
-    print(" SMART GRID FAULT DETECTION SYSTEM")
-    print("==========================================")
-    print()
-    print("Server starting...")
-    print("Port:", port)
-    print()
-    print("Waiting for sensor data...")
-    print()
-
-    app.run(
-        host="0.0.0.0",
-        port=port
-    )
-
+  app.run(host="0.0.0.0", port=port)
